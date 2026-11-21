@@ -182,7 +182,7 @@ end
 --====================================================--
 local Window = Library:CreateWindow({
 	Title = "僵尸猎手",
-	Footer = "版本: v1.0 | 手机端",
+	Footer = "版本: v1.1 | 手机端",
 	Icon = 95816097006870,
 	NotifySide = "Right",
 	ShowCustomCursor = true,
@@ -191,6 +191,7 @@ local Window = Library:CreateWindow({
 local Tabs = {
 	Combat  = Window:AddTab("自动战斗", "crosshair"),
 	Visual  = Window:AddTab("透视", "eye"),
+	Fly     = Window:AddTab("飞行", "send"),
 	Protect = Window:AddTab("防护", "shield"),
 	Misc    = Window:AddTab("杂项", "boxes"),
 	["UI Settings"] = Window:AddTab("界面设置", "settings"),
@@ -432,7 +433,205 @@ task.spawn(function()
 end)
 
 --====================================================--
---  页 3：防护
+--  页 3：飞行
+--====================================================--
+local FlyLeft = Tabs.Fly:AddLeftGroupbox("飞行控制", "send")
+
+local flyState = {
+	Flying = false,
+	GoingUp = false,
+	GoingDown = false,
+	BodyVelocity = nil,
+	BodyGyro = nil,
+	Connection = nil,
+	ButtonsGui = nil,
+}
+
+-- 屏幕上的 上升/下降 按住按钮（飞行开启时显示，可拖动）
+local function CreateFlyButtons()
+	if flyState.ButtonsGui then return end
+
+	local gui = Instance.new("ScreenGui")
+	gui.Name = "ZHFlyButtons"
+	gui.ResetOnSpawn = false
+	if gethui then
+		gui.Parent = gethui()
+	elseif syn and syn.protect_gui then
+		syn.protect_gui(gui)
+		gui.Parent = game:GetService("CoreGui")
+	else
+		gui.Parent = LocalPlayer:WaitForChild("PlayerGui")
+	end
+
+	local frame = Instance.new("Frame")
+	frame.Size = UDim2.new(0, 110, 0, 150)
+	frame.Position = UDim2.new(1, -130, 0.5, -75)
+	frame.BackgroundTransparency = 1
+	frame.Active = true
+	frame.Draggable = true
+	frame.Parent = gui
+
+	local function holdBtn(text, posY, color)
+		local btn = Instance.new("TextButton")
+		btn.Size = UDim2.new(1, 0, 0, 64)
+		btn.Position = UDim2.new(0, 0, 0, posY)
+		btn.BackgroundColor3 = color
+		btn.BackgroundTransparency = 0.25
+		btn.Text = text
+		btn.TextColor3 = Color3.new(1, 1, 1)
+		btn.Font = Enum.Font.GothamBold
+		btn.TextSize = 18
+		btn.BorderSizePixel = 0
+		btn.Parent = frame
+		local c = Instance.new("UICorner")
+		c.CornerRadius = UDim.new(0, 12)
+		c.Parent = btn
+		return btn
+	end
+
+	local upBtn = holdBtn("上升 ▲", 0, Color3.fromRGB(45, 90, 160))
+	local downBtn = holdBtn("下降 ▼", 76, Color3.fromRGB(120, 60, 160))
+
+	upBtn.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.Touch
+			or input.UserInputType == Enum.UserInputType.MouseButton1 then
+			flyState.GoingUp = true
+		end
+	end)
+	upBtn.InputEnded:Connect(function() flyState.GoingUp = false end)
+
+	downBtn.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.Touch
+			or input.UserInputType == Enum.UserInputType.MouseButton1 then
+			flyState.GoingDown = true
+		end
+	end)
+	downBtn.InputEnded:Connect(function() flyState.GoingDown = false end)
+
+	flyState.ButtonsGui = gui
+end
+
+local function StartFly()
+	local char = GetCharacter()
+	local root = char and char:FindFirstChild("HumanoidRootPart")
+	local humanoid = char and char:FindFirstChildOfClass("Humanoid")
+	if not root or not humanoid then return end
+
+	humanoid.PlatformStand = true
+
+	local bv = Instance.new("BodyVelocity")
+	bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+	bv.Velocity = Vector3.zero
+	bv.Parent = root
+
+	local bg = Instance.new("BodyGyro")
+	bg.MaxTorque = Vector3.new(math.huge, math.huge, math.huge)
+	bg.P = 9e4
+	bg.CFrame = root.CFrame
+	bg.Parent = root
+
+	flyState.BodyVelocity = bv
+	flyState.BodyGyro = bg
+
+	local camera = Workspace.CurrentCamera
+	flyState.Connection = RunService.RenderStepped:Connect(function()
+		if not flyState.Flying then return end
+		local c = GetCharacter()
+		local r = c and c:FindFirstChild("HumanoidRootPart")
+		local hum = c and c:FindFirstChildOfClass("Humanoid")
+		if not r or not hum or hum.Health <= 0 then return end
+
+		local speed = Options.FlySpeed and Options.FlySpeed.Value or 50
+		local vel = hum.MoveDirection * speed
+		if flyState.GoingUp then
+			vel = vel + Vector3.new(0, speed, 0)
+		elseif flyState.GoingDown then
+			vel = vel + Vector3.new(0, -speed, 0)
+		end
+		bv.Velocity = vel
+		bg.CFrame = CFrame.new(r.Position, r.Position + camera.CFrame.LookVector)
+	end)
+
+	CreateFlyButtons()
+	if flyState.ButtonsGui then
+		flyState.ButtonsGui.Enabled = true
+	end
+end
+
+local function StopFly()
+	flyState.Flying = false
+	flyState.GoingUp = false
+	flyState.GoingDown = false
+	if flyState.Connection then
+		flyState.Connection:Disconnect()
+		flyState.Connection = nil
+	end
+	if flyState.BodyVelocity then flyState.BodyVelocity:Destroy() flyState.BodyVelocity = nil end
+	if flyState.BodyGyro then flyState.BodyGyro:Destroy() flyState.BodyGyro = nil end
+	if flyState.ButtonsGui then flyState.ButtonsGui.Enabled = false end
+
+	local char = GetCharacter()
+	local humanoid = char and char:FindFirstChildOfClass("Humanoid")
+	if humanoid then
+		humanoid.PlatformStand = false
+		humanoid:ChangeState(Enum.HumanoidStateType.Landed)
+	end
+end
+
+FlyLeft:AddToggle("FlyToggle", {
+	Text = "开启飞行",
+	Tooltip = "方向跟随摇杆 + 相机朝向，用屏幕按钮升降",
+	Default = false,
+	Callback = function(Value)
+		if Value then
+			flyState.Flying = true
+			StartFly()
+			Library:Notify({ Title = "飞行", Description = "已开启，拖动摇杆移动，按住右侧按钮升降", Time = 3 })
+		else
+			StopFly()
+		end
+	end,
+})
+
+FlyLeft:AddSlider("FlySpeed", {
+	Text = "飞行速度",
+	Default = 50, Min = 10, Max = 300, Rounding = 0,
+	Tooltip = "飞行移动速度",
+})
+
+FlyLeft:AddLabel("手机端：开启后屏幕右侧出现「上升/下降」按住按钮，可拖动位置", true)
+
+-- PC 快捷键：E 上升 / Q 下降
+local UserInputService = game:GetService("UserInputService")
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+	if gameProcessed then return end
+	if input.KeyCode == Enum.KeyCode.E then
+		flyState.GoingUp = true
+	elseif input.KeyCode == Enum.KeyCode.Q then
+		flyState.GoingDown = true
+	end
+end)
+UserInputService.InputEnded:Connect(function(input)
+	if input.KeyCode == Enum.KeyCode.E then
+		flyState.GoingUp = false
+	elseif input.KeyCode == Enum.KeyCode.Q then
+		flyState.GoingDown = false
+	end
+end)
+
+-- 死亡/重生后自动关闭飞行
+LocalPlayer.CharacterAdded:Connect(function()
+	task.wait(0.5)
+	if flyState.Flying then
+		StopFly()
+		if Toggles.FlyToggle then
+			Toggles.FlyToggle:SetValue(false)
+		end
+	end
+end)
+
+--====================================================--
+--  页 4：防护
 --====================================================--
 local ProtectLeft = Tabs.Protect:AddLeftGroupbox("伤害防护", "shield")
 
@@ -485,7 +684,7 @@ task.spawn(function()
 end)
 
 --====================================================--
---  页 4：杂项
+--  页 5：杂项
 --====================================================--
 local MiscLeft = Tabs.Misc:AddLeftGroupbox("人物增强", "user")
 
@@ -524,7 +723,7 @@ LocalPlayer.CharacterAdded:Connect(function(char)
 end)
 
 --====================================================--
---  页 5：界面设置
+--  页 6：界面设置
 --====================================================--
 local MenuGroup = Tabs["UI Settings"]:AddLeftGroupbox("菜单", "wrench")
 
@@ -560,6 +759,11 @@ MenuGroup:AddLabel("菜单快捷键")
 	:AddKeyPicker("MenuKeybind", { Default = "RightShift", NoUI = true, Text = "菜单快捷键" })
 
 MenuGroup:AddButton("卸载脚本", function()
+	StopFly()
+	if flyState.ButtonsGui then
+		pcall(function() flyState.ButtonsGui:Destroy() end)
+		flyState.ButtonsGui = nil
+	end
 	for model in pairs(ESPStore) do RemoveESP(model) end
 	Library:Unload()
 end)
@@ -579,7 +783,7 @@ pcall(function()
 end)
 
 Library:Notify({
-	Title = "僵尸猎手 v1.0",
-	Description = "加载成功！打开「自动战斗」页开启自动开火",
+	Title = "僵尸猎手 v1.1",
+	Description = "加载成功！「自动战斗」开火打僵尸，「飞行」页一键起飞",
 	Time = 5,
 })
