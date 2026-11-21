@@ -447,6 +447,38 @@ local flyState = {
 	ButtonsGui = nil,
 }
 
+-- 手写拖动（Draggable 已废弃，部分手机执行器失效）
+local function MakeDraggable(frame, dragHandle)
+	dragHandle = dragHandle or frame
+	local dragging = false
+	local dragStart, startPos
+
+	dragHandle.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.Touch
+			or input.UserInputType == Enum.UserInputType.MouseButton1 then
+			dragging = true
+			dragStart = input.Position
+			startPos = frame.Position
+		end
+	end)
+	dragHandle.InputEnded:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.Touch
+			or input.UserInputType == Enum.UserInputType.MouseButton1 then
+			dragging = false
+		end
+	end)
+	dragHandle.InputChanged:Connect(function(input)
+		if dragging and (input.UserInputType == Enum.UserInputType.Touch
+			or input.UserInputType == Enum.UserInputType.MouseMovement) then
+			local delta = input.Position - dragStart
+			frame.Position = UDim2.new(
+				startPos.X.Scale, startPos.X.Offset + delta.X,
+				startPos.Y.Scale, startPos.Y.Offset + delta.Y
+			)
+		end
+	end)
+end
+
 -- 屏幕上的 上升/下降 按住按钮（飞行开启时显示，可拖动）
 local function CreateFlyButtons()
 	if flyState.ButtonsGui then return end
@@ -454,29 +486,31 @@ local function CreateFlyButtons()
 	local gui = Instance.new("ScreenGui")
 	gui.Name = "ZHFlyButtons"
 	gui.ResetOnSpawn = false
-	if gethui then
-		gui.Parent = gethui()
-	elseif syn and syn.protect_gui then
-		syn.protect_gui(gui)
-		gui.Parent = game:GetService("CoreGui")
-	else
-		gui.Parent = LocalPlayer:WaitForChild("PlayerGui")
-	end
+	gui.DisplayOrder = 999
+	gui.IgnoreGuiInset = true
+
+	-- 优先挂 PlayerGui：部分手机执行器对 gethui/CoreGui 不渲染
+	gui.Parent = LocalPlayer:WaitForChild("PlayerGui")
 
 	local frame = Instance.new("Frame")
 	frame.Size = UDim2.new(0, 110, 0, 150)
 	frame.Position = UDim2.new(1, -130, 0.5, -75)
-	frame.BackgroundTransparency = 1
+	frame.BackgroundColor3 = Color3.fromRGB(20, 20, 25)
+	frame.BackgroundTransparency = 0.5
+	frame.BorderSizePixel = 0
 	frame.Active = true
-	frame.Draggable = true
 	frame.Parent = gui
+
+	local frameCorner = Instance.new("UICorner")
+	frameCorner.CornerRadius = UDim.new(0, 12)
+	frameCorner.Parent = frame
 
 	local function holdBtn(text, posY, color)
 		local btn = Instance.new("TextButton")
-		btn.Size = UDim2.new(1, 0, 0, 64)
-		btn.Position = UDim2.new(0, 0, 0, posY)
+		btn.Size = UDim2.new(1, -16, 0, 60)
+		btn.Position = UDim2.new(0, 8, 0, posY)
 		btn.BackgroundColor3 = color
-		btn.BackgroundTransparency = 0.25
+		btn.BackgroundTransparency = 0.15
 		btn.Text = text
 		btn.TextColor3 = Color3.new(1, 1, 1)
 		btn.Font = Enum.Font.GothamBold
@@ -484,13 +518,15 @@ local function CreateFlyButtons()
 		btn.BorderSizePixel = 0
 		btn.Parent = frame
 		local c = Instance.new("UICorner")
-		c.CornerRadius = UDim.new(0, 12)
+		c.CornerRadius = UDim.new(0, 10)
 		c.Parent = btn
 		return btn
 	end
 
-	local upBtn = holdBtn("上升 ▲", 0, Color3.fromRGB(45, 90, 160))
-	local downBtn = holdBtn("下降 ▼", 76, Color3.fromRGB(120, 60, 160))
+	local upBtn = holdBtn("上升 ▲", 8, Color3.fromRGB(45, 90, 160))
+	local downBtn = holdBtn("下降 ▼", 80, Color3.fromRGB(120, 60, 160))
+
+	MakeDraggable(frame)
 
 	upBtn.InputBegan:Connect(function(input)
 		if input.UserInputType == Enum.UserInputType.Touch
@@ -647,6 +683,39 @@ ProtectLeft:AddToggle("AntiVoid", {
 	Default = false,
 })
 
+-- 穿墙 (Noclip)：持续把角色部件碰撞关掉
+ProtectLeft:AddToggle("Noclip", {
+	Text = "穿墙 (Noclip)",
+	Tooltip = "开启后可穿过墙体和障碍物",
+	Default = false,
+})
+
+local noclipConnection
+local function SetNoclip(enabled)
+	if enabled then
+		if noclipConnection then return end
+		noclipConnection = RunService.Stepped:Connect(function()
+			local char = GetCharacter()
+			if not char then return end
+			for _, part in ipairs(char:GetDescendants()) do
+				if part:IsA("BasePart") and part.CanCollide then
+					part.CanCollide = false
+				end
+			end
+		end)
+	else
+		if noclipConnection then
+			noclipConnection:Disconnect()
+			noclipConnection = nil
+		end
+		-- Roblox 角色部件默认 CanCollide = false，无需恢复
+	end
+end
+
+Toggles.Noclip:OnChanged(function()
+	SetNoclip(Toggles.Noclip.Value)
+end)
+
 -- 防岩浆：hook __namecall 拦截 Lava 上报
 do
 	local mt = getrawmetatable and getrawmetatable(game)
@@ -760,6 +829,7 @@ MenuGroup:AddLabel("菜单快捷键")
 
 MenuGroup:AddButton("卸载脚本", function()
 	StopFly()
+	SetNoclip(false)
 	if flyState.ButtonsGui then
 		pcall(function() flyState.ButtonsGui:Destroy() end)
 		flyState.ButtonsGui = nil
